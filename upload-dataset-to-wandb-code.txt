@@ -1,0 +1,1 @@
+python utils/loggers/wandb/log_dataset.py --project yolov5-custom --data data/custom_dataset.yaml

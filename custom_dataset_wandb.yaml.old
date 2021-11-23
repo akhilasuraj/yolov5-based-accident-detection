@@ -1,0 +1,10 @@
+names:
+- 3wheel
+- bus
+- lorry
+- van
+- jeep
+nc: 5
+test: null
+train: wandb-artifact://yolov5-custom\train
+val: wandb-artifact://yolov5-custom\val
