@@ -5,6 +5,9 @@ Run inference on images, videos, directories, streams, etc.
 Usage:
     $ python path/to/detect.py --source path/to/img.jpg --weights yolov5s.pt --img 640
 """
+# tracking part imports
+from tracker.centroidtracker import CentroidTracker
+# end of tracking part
 
 import argparse
 import sys
@@ -26,6 +29,9 @@ from utils.general import check_img_size, check_requirements, check_imshow, colo
 from utils.plots import colors, plot_one_box
 from utils.torch_utils import select_device, load_classifier, time_sync
 
+# tracking part 
+ct = CentroidTracker()
+# end
 
 @torch.no_grad()
 def run(weights='yolov5s.pt',  # model.pt path(s)
@@ -191,7 +197,10 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 # Write results
+                coordlist=[]  # list of box coordinates
                 for *xyxy, conf, cls in reversed(det):
+                    coordlist.append(torch.tensor(xyxy).view(1, 4).tolist()[0]) # append box coordinates to list
+
                     if save_txt:  # Write to file
                         xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
@@ -204,6 +213,23 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                         im0 = plot_one_box(xyxy, im0, label=label, color=colors(c, True), line_width=line_thickness)
                         if save_crop:
                             save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+
+                # update our centroid tracker using the computed set of bounding box rectangles
+                objects = ct.update(coordlist)
+
+                # loop over the tracked objects
+                for (objectID, centroid) in objects.items():
+                    # draw both the ID of the object and the centroid of the
+                    # object on the output frame
+                    text = "ID {}".format(objectID)
+                    cv2.putText(im0, text, (centroid[0] - 10, centroid[1] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    cv2.circle(im0, (centroid[0], centroid[1]), 4, (0, 255, 0), -1)
+
+            cv2.imshow('feed', im0)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
 
             # Print time (inference + NMS)
             print(f'{s}Done. ({t2 - t1:.3f}s)')
