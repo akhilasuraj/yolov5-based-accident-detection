@@ -5,9 +5,21 @@ Run inference on images, videos, directories, streams, etc.
 Usage:
     $ python path/to/detect.py --source path/to/img.jpg --weights yolov5s.pt --img 640
 """
+
+from models.experimental import attempt_load
+from utils.datasets import LoadStreams, LoadImages
+from utils.general import check_img_size, check_requirements, check_imshow, colorstr, non_max_suppression, \
+    apply_classifier, scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path, save_one_box
+from utils.plots import colors, plot_one_box
+from utils.torch_utils import select_device, load_classifier, time_sync
+
 # tracking part imports
 from tracker.centroidtracker import CentroidTracker
 # end of tracking part
+
+# accidet detection part imports
+from accidentDetection.accident import detect as acdt
+# end of accidet detection
 
 import argparse
 import sys
@@ -22,12 +34,7 @@ import torch.backends.cudnn as cudnn
 FILE = Path(__file__).absolute()
 sys.path.append(FILE.parents[0].as_posix())  # add yolov5/ to path
 
-from models.experimental import attempt_load
-from utils.datasets import LoadStreams, LoadImages
-from utils.general import check_img_size, check_requirements, check_imshow, colorstr, non_max_suppression, \
-    apply_classifier, scale_coords, xyxy2xywh, strip_optimizer, set_logging, increment_path, save_one_box
-from utils.plots import colors, plot_one_box
-from utils.torch_utils import select_device, load_classifier, time_sync
+
 
 # tracking part 
 ct = CentroidTracker()
@@ -123,6 +130,11 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         bs = 1  # batch_size
     vid_path, vid_writer = [None] * bs, [None] * bs
 
+    # max difference between predicted and actual points
+    maxDifGlobal = 0
+    maxDifIdGlobal = ''
+    ifAccident = False
+
     # Run inference
     if pt and device.type != 'cpu':
         model(torch.zeros(1, 3, *imgsz).to(device).type_as(next(model.parameters())))  # run once
@@ -174,6 +186,10 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
         if classify:
             pred = apply_classifier(pred, modelc, img, im0s)
 
+        # max difference between predicted and actual points
+        maxDifLocal = 0
+        maxDifIdLocal = ''
+        
         # Process predictions
         for i, det in enumerate(pred):  # detections per image
             if webcam:  # batch_size >= 1
@@ -201,23 +217,55 @@ def run(weights='yolov5s.pt',  # model.pt path(s)
                 for *xyxy, conf, cls in reversed(det):
                     coordlist.append(torch.tensor(xyxy).view(1, 4).tolist()[0]) # append box coordinates to list
 
-                    if save_txt:  # Write to file
-                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
-                        line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
-                        with open(txt_path + '.txt', 'a') as f:
-                            f.write(('%g ' * len(line)).rstrip() % line + '\n')
+                    # if save_txt:  # Write to file
+                    #     xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                    #     line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
+                    #     with open(txt_path + '.txt', 'a') as f:
+                    #         f.write(('%g ' * len(line)).rstrip() % line + '\n')
 
-                    if save_img or save_crop or view_img:  # Add bbox to image
-                        c = int(cls)  # integer class
-                        label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
-                        im0 = plot_one_box(xyxy, im0, label=label, color=colors(c, True), line_width=line_thickness)
-                        if save_crop:
-                            save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+                    # if save_img or save_crop or view_img:  # Add bbox to image
+                    #     c = int(cls)  # integer class
+                    #     label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
+                    #     im0 = plot_one_box(xyxy, im0, label=label, color=colors(c, True), line_width=line_thickness)
+                    #     if save_crop:
+                    #         save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
 
                 # update our centroid tracker using the computed set of bounding box rectangles
                 objects = ct.update(coordlist)
 
-                # loop over the tracked objects
+                # acident detection
+                coordDict = acdt(objects)
+                # print(coordDict)
+
+                #  print max distance difference
+                color = (153, 255, 153)
+                for (objectID, data) in coordDict.items():
+                    (maxDifLocal, maxDifIdLocal) = (data[3], objectID) if maxDifLocal  < data[3] else (maxDifLocal, maxDifIdLocal)
+                    (maxDifGlobal, maxDifIdGlobal) = (data[3], objectID) if maxDifGlobal  < data[3] else (maxDifGlobal, maxDifIdGlobal)
+                    if data[3] > 15:
+                        ifAccident = True 
+
+                cv2.putText(im0, "max detection in frame = {:.2f}  in ID = {}".format(maxDifLocal, maxDifIdLocal), (20,30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+                cv2.putText(im0, "max detection in video = {:.2f} in ID = {}".format(maxDifGlobal, maxDifIdGlobal), (20,60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+                cv2.putText(im0, "{}".format("Accident" if ifAccident else "No Accident"), (500,30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+
+                # detect if an accident
+
+
+                #  draw vehicle identifying area
+                color = (255, 0, 0)
+                cv2.rectangle(im0, (100,100), (600,480), color, 3)
+
+                # draw vehicle moving paths
+                color = (0, 255, 0)
+                for (objectID, path) in coordDict.items():
+                    point = path[0]
+                    prepoint = path[1] if path[1] != 0 else path[0]
+                    prePrepoint = path[2] if path[2] != 0 else prepoint
+                    cv2.line(im0, point, prepoint, color, 5)
+                    cv2.line(im0, prepoint, prePrepoint, color, 5)
+
+                # loop over the tracked objects and print id and point
                 for (objectID, centroid) in objects.items():
                     # draw both the ID of the object and the centroid of the
                     # object on the output frame
